@@ -149,7 +149,8 @@ class _DecryptorPageState extends State<DecryptorPage> {
       );
 
       if (result != null && result.files.single.bytes != null) {
-        final fileBytes = result.files.single.bytes!;
+        final file = result.files.single;
+        final fileBytes = file.bytes!;
         final decrypted = decryptor.decryptWithIvPrefix(fileBytes);
 
         // Check if the decrypted content is JSON
@@ -157,10 +158,31 @@ class _DecryptorPageState extends State<DecryptorPage> {
         final formattedText =
             isJsonContent ? _formatJson(decrypted) : decrypted;
 
-        setState(() {
-          decryptedText = formattedText;
-          isJson = isJsonContent;
-        });
+        final isEnc = file.name.toLowerCase().endsWith('.enc');
+
+        if (isEnc) {
+          String downloadName = 'decrypted_file.txt';
+          final originalName = file.name;
+          if (originalName.toLowerCase().endsWith('.enc')) {
+            downloadName =
+                originalName.substring(0, originalName.length - 4) + '.txt';
+          } else {
+            downloadName = '$originalName.txt';
+          }
+
+          setState(() {
+            decryptedText = "";
+            isJson = false;
+          });
+
+          await _downloadTextFileWeb(formattedText, 'txt',
+              customFilename: downloadName);
+        } else {
+          setState(() {
+            decryptedText = formattedText;
+            isJson = isJsonContent;
+          });
+        }
       } else {
         setState(() {
           decryptedText = "No file selected.";
@@ -457,9 +479,10 @@ class _DecryptorPageState extends State<DecryptorPage> {
     );
   }
 
-  Future<void> _downloadTextFileWeb(String content, String type) async {
+  Future<void> _downloadTextFileWeb(String content, String type,
+      {String? customFilename}) async {
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final filename = "ravamate_export_$timestamp.$type";
+    final filename = customFilename ?? "ravamate_export_$timestamp.$type";
 
     final bytes = content.codeUnits;
     final blob = html.Blob([Uint8List.fromList(bytes)], 'text/plain');
@@ -476,6 +499,11 @@ class _DecryptorPageState extends State<DecryptorPage> {
     html.Url.revokeObjectUrl(url);
 
     if (!mounted) return;
+
+    final title = type.toLowerCase() == 'csv'
+        ? "CSV Downloaded!"
+        : "File Decrypted & Downloaded!";
+
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -487,8 +515,8 @@ class _DecryptorPageState extends State<DecryptorPage> {
               children: [
                 const Icon(Icons.download_done, color: Color(0xFF10B981)),
                 const SizedBox(width: 8),
-                Text("CSV Downloaded!",
-                    style: TextStyle(
+                Text(title,
+                    style: const TextStyle(
                         fontWeight: FontWeight.bold, color: Colors.white)),
               ],
             ),
