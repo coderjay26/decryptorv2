@@ -6,7 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'auth_service.dart';
 import 'decryptor.dart';
+import 'login_page.dart';
 import 'package:intl/intl.dart';
 
 void main() {
@@ -74,7 +76,68 @@ class MyApp extends StatelessWidget {
               const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         ),
       ),
-      home: const DecryptorStudioPage(),
+      home: const StudioAuthGate(),
+    );
+  }
+}
+
+// ─── Studio Auth Gate ────────────────────────────────────────────────────────
+
+class StudioAuthGate extends StatefulWidget {
+  const StudioAuthGate({super.key});
+
+  @override
+  State<StudioAuthGate> createState() => _StudioAuthGateState();
+}
+
+class _StudioAuthGateState extends State<StudioAuthGate> {
+  Timer? _inactivityChecker;
+
+  @override
+  void initState() {
+    super.initState();
+    AuthService().initSession();
+    _startInactivityChecker();
+  }
+
+  @override
+  void dispose() {
+    _inactivityChecker?.cancel();
+    super.dispose();
+  }
+
+  void _startInactivityChecker() {
+    _inactivityChecker?.cancel();
+    // Check every 30 seconds for session timeout
+    _inactivityChecker = Timer.periodic(const Duration(seconds: 30), (_) {
+      final session = AuthService().currentSession;
+      if (session != null && session.isExpired) {
+        AuthService().logout();
+      }
+    });
+  }
+
+  void _onUserInteraction() {
+    AuthService().refreshActivity();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<AuthSession?>(
+      valueListenable: AuthService().sessionNotifier,
+      builder: (context, session, _) {
+        if (session != null && !session.isExpired) {
+          return Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => _onUserInteraction(),
+            onPointerMove: (_) => _onUserInteraction(),
+            child: const DecryptorStudioPage(),
+          );
+        }
+        return StudioLoginPage(
+          onAuthenticated: () {},
+        );
+      },
     );
   }
 }
@@ -695,6 +758,79 @@ class _DecryptorStudioPageState extends State<DecryptorStudioPage>
             icon: Icons.refresh_rounded,
             label: 'Reset',
             onPressed: _resetWorkbench,
+          ),
+          const SizedBox(width: 14),
+          _buildOperatorSessionBadge(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOperatorSessionBadge() {
+    final session = AuthService().currentSession;
+    final username = session?.username ?? 'admin';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: kCardElevated,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: const BoxDecoration(
+              color: kGreen,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Operator: $username',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 10),
+          InkWell(
+            onTap: () {
+              AuthService().logout();
+            },
+            borderRadius: BorderRadius.circular(6),
+            child: Tooltip(
+              message: 'Lock Studio (Logout)',
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: kRed.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: kRed.withOpacity(0.3)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.lock_rounded,
+                        size: 11, color: Color(0xFFFCA5A5)),
+                    SizedBox(width: 4),
+                    Text(
+                      'Lock',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFFCA5A5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
