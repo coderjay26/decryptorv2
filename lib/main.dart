@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -178,6 +179,14 @@ class _DecryptorStudioPageState extends State<DecryptorStudioPage>
   _WebToast? _activeToast;
   Timer? _toastTimer;
 
+  // Drag and Drop state (HTML5 Desktop Web)
+  bool _isWindowDragging = false;
+  int _dragCounter = 0;
+  StreamSubscription<html.MouseEvent>? _dragEnterSub;
+  StreamSubscription<html.MouseEvent>? _dragOverSub;
+  StreamSubscription<html.MouseEvent>? _dragLeaveSub;
+  StreamSubscription<html.MouseEvent>? _dropSub;
+
   // Animations
   late final AnimationController _bgAnimationCtrl;
   late final AnimationController _radarCtrl;
@@ -205,11 +214,129 @@ class _DecryptorStudioPageState extends State<DecryptorStudioPage>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
+
+    // Native HTML5 Drag and Drop event binding for Web Studio
+    if (kIsWeb) {
+      _initWebDragAndDrop();
+    }
+  }
+
+  void _initWebDragAndDrop() {
+    _dragEnterSub = html.window.onDragEnter.listen((event) {
+      event.preventDefault();
+      event.stopPropagation();
+      _dragCounter++;
+      if (!_isWindowDragging) {
+        setState(() => _isWindowDragging = true);
+      }
+    });
+
+    _dragOverSub = html.window.onDragOver.listen((event) {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        event.dataTransfer.dropEffect = 'copy';
+      } catch (_) {}
+      if (!_isWindowDragging) {
+        setState(() => _isWindowDragging = true);
+      }
+    });
+
+    _dragLeaveSub = html.window.onDragLeave.listen((event) {
+      event.preventDefault();
+      event.stopPropagation();
+      _dragCounter--;
+      if (_dragCounter <= 0) {
+        _dragCounter = 0;
+        if (_isWindowDragging) {
+          setState(() => _isWindowDragging = false);
+        }
+      }
+    });
+
+    _dropSub = html.window.onDrop.listen((event) {
+      event.preventDefault();
+      event.stopPropagation();
+      _dragCounter = 0;
+      if (_isWindowDragging) {
+        setState(() => _isWindowDragging = false);
+      }
+
+      final files = event.dataTransfer.files;
+      if (files != null && files.isNotEmpty) {
+        _handleDroppedHtmlFile(files.first);
+      }
+    });
+  }
+
+  Future<void> _handleDroppedHtmlFile(html.File file) async {
+    if (_state == DecryptState.decrypting) {
+      _showToast(
+        'Decryption In Progress',
+        'Please wait for current operation to complete',
+        kAmber,
+        Icons.hourglass_top_rounded,
+      );
+      return;
+    }
+
+    try {
+      final reader = html.FileReader();
+      reader.readAsArrayBuffer(file);
+      await reader.onLoadEnd.first;
+
+      final dynamic rawResult = reader.result;
+      Uint8List bytes;
+      if (rawResult is Uint8List) {
+        bytes = rawResult;
+      } else if (rawResult is ByteBuffer) {
+        bytes = Uint8List.view(rawResult);
+      } else if (rawResult is List<int>) {
+        bytes = Uint8List.fromList(rawResult);
+      } else {
+        throw 'Unsupported file data format';
+      }
+
+      final ext = file.name.split('.').last.toLowerCase();
+      DecryptMode targetMode = _selectedMode;
+      if (ext == 'sqlite' || ext == 'db') {
+        targetMode = DecryptMode.sqlite;
+      } else if (ext == 'csv') {
+        targetMode = DecryptMode.csv;
+      } else if (ext == 'enc' || ext == 'txt') {
+        targetMode = DecryptMode.textOrEnc;
+      }
+
+      setState(() {
+        _selectedMode = targetMode;
+        _stagedFile = PlatformFile(
+          name: file.name,
+          size: file.size,
+          bytes: bytes,
+        );
+      });
+
+      _showToast(
+        'File Loaded via Drag & Drop',
+        'Staged: ${file.name} (${(file.size / 1024).toStringAsFixed(1)} KB)',
+        kGreen,
+        Icons.file_download_done_rounded,
+      );
+
+      // Immediately run decryption pipeline
+      await _runDecryptionPipeline();
+    } catch (e) {
+      _setError('Failed to process dropped file: $e');
+    }
   }
 
   @override
   void dispose() {
     _toastTimer?.cancel();
+    _dragEnterSub?.cancel();
+    _dragOverSub?.cancel();
+    _dragLeaveSub?.cancel();
+    _dropSub?.cancel();
     _bgAnimationCtrl.dispose();
     _radarCtrl.dispose();
     _cipherStreamCtrl.dispose();
@@ -658,6 +785,74 @@ class _DecryptorStudioPageState extends State<DecryptorStudioPage>
                     ),
             ),
           ),
+          // ─── Fullscreen Drag-and-Drop Cyber Overlay ──────────────────────
+          if (_isWindowDragging)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  decoration: BoxDecoration(
+                    color: kPrimary.withOpacity(0.08),
+                    border: Border.all(
+                      color: kPrimaryLight.withOpacity(0.6),
+                      width: 3,
+                    ),
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: kCard.withOpacity(0.92),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: kPrimaryLight.withOpacity(0.5),
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: kPrimary.withOpacity(0.35),
+                                blurRadius: 40,
+                                spreadRadius: 4,
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(
+                                Icons.file_upload_rounded,
+                                size: 56,
+                                color: kPrimaryLight,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'DROP FILE TO DECRYPT',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  letterSpacing: 2,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Release to stage and run decryption',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.white.withOpacity(0.55),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1001,6 +1196,7 @@ class _DecryptorStudioPageState extends State<DecryptorStudioPage>
           mode: _selectedMode,
           stagedFile: _stagedFile,
           isDecrypting: _state == DecryptState.decrypting,
+          isWindowDragging: _isWindowDragging,
           onSelectFile: _handleFileSelection,
           onRunDecrypt: _runDecryptionPipeline,
         ),
@@ -1791,6 +1987,7 @@ class _DropzonePanel extends StatefulWidget {
   final DecryptMode mode;
   final PlatformFile? stagedFile;
   final bool isDecrypting;
+  final bool isWindowDragging;
   final VoidCallback onSelectFile;
   final VoidCallback onRunDecrypt;
 
@@ -1798,6 +1995,7 @@ class _DropzonePanel extends StatefulWidget {
     required this.mode,
     required this.stagedFile,
     required this.isDecrypting,
+    required this.isWindowDragging,
     required this.onSelectFile,
     required this.onRunDecrypt,
   });
@@ -1854,16 +2052,29 @@ class _DropzonePanelState extends State<_DropzonePanel> {
                 duration: const Duration(milliseconds: 180),
                 padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
                 decoration: BoxDecoration(
-                  color: _isHovered
-                      ? kPrimary.withOpacity(0.08)
+                  color: (_isHovered || widget.isWindowDragging)
+                      ? kPrimary.withOpacity(0.12)
                       : Colors.black.withOpacity(0.25),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: _isHovered
-                        ? kPrimary
-                        : (hasFile ? kGreen.withOpacity(0.6) : kBorder),
-                    width: _isHovered || hasFile ? 1.5 : 1.0,
+                    color: widget.isWindowDragging
+                        ? kPrimaryLight
+                        : (_isHovered
+                            ? kPrimary
+                            : (hasFile ? kGreen.withOpacity(0.6) : kBorder)),
+                    width: (_isHovered || hasFile || widget.isWindowDragging)
+                        ? 2.0
+                        : 1.0,
                   ),
+                  boxShadow: widget.isWindowDragging
+                      ? [
+                          BoxShadow(
+                            color: kPrimary.withOpacity(0.25),
+                            blurRadius: 20,
+                            spreadRadius: 2,
+                          )
+                        ]
+                      : null,
                 ),
                 child: Column(
                   children: [
